@@ -1,4 +1,58 @@
-# include "move_generation.h"
+# include "move_generation_2.h"
+
+void visualize_game_state_2(const game_state& state) {
+    const char* piece_symbols = "PNBRQKpnbrqk";
+
+    char board[8][8] = {};
+
+    // Initialize board with empty spaces
+    for (int r = 0; r < 8; ++r)
+        for (int c = 0; c < 8; ++c)
+            board[r][c] = '.';
+
+    // Fill the board with pieces
+    for (int i = 0; i < 12; ++i) {
+        U64 bitboard = state.piece_bitboards[i];
+        for (int square = 0; square < 64; ++square) {
+            if (bitboard & (1ULL << square)) {
+                int row = 7 - (square / 8);
+                int col = square % 8;
+                board[row][col] = piece_symbols[i];
+            }
+        }
+    }
+
+    // Mark en passant squares
+    for (int i = 0; i < 2; ++i) {
+        U64 ep_board = state.en_passant_bitboards[i];
+        for (int square = 0; square < 64; ++square) {
+            if (ep_board & (1ULL << square)) {
+                int row = 7 - (square / 8);
+                int col = square % 8;
+                board[row][col] = '*';  // En passant target square
+            }
+        }
+    }
+
+    // Print the board
+    std::cout << "  a b c d e f g h\n";
+    std::cout << "  ----------------\n";
+    for (int r = 0; r < 8; ++r) {
+        std::cout << (8 - r) << "| ";
+        for (int c = 0; c < 8; ++c) {
+            std::cout << board[r][c] << ' ';
+        }
+        std::cout << "|\n";
+    }
+    std::cout << "  ----------------\n";
+
+    // Print castling rights
+    std::cout << "Castling rights: "
+              << (state.w_long_castle ? "Q" : "-")
+              << (state.w_short_castle ? "K" : "-")
+              << (state.b_long_castle ? "q" : "-")
+              << (state.b_short_castle ? "k" : "-") << "\n";
+}
 
 // usefull functions
 
@@ -810,16 +864,6 @@ int pseudo_legal_move_generator(std::array<move, 256>& moves, game_state& state,
     return move_index;
 }
 
-struct zobrist_randoms {
-    std::array<std::array<U64, 12>, 64> zobrist_piece_table;
-    U64 zobrist_black_to_move;
-    U64 zobrist_w_long_castle;
-    U64 zobrist_w_short_castle;
-    U64 zobrist_b_long_castle;
-    U64 zobrist_b_short_castle;
-    std::array<U64, 8> zobrist_en_passant;
-};
-
 U64 init_zobrist_hashing(game_state &state, zobrist_randoms &zobrist, bool color) {
     // create random bitstrings for each game element and hash the first position
 
@@ -888,16 +932,6 @@ U64 init_zobrist_hashing(game_state &state, zobrist_randoms &zobrist, bool color
     return hash;
 }
 
-struct move_undo {
-    U64 zobrist_hash;
-    bool w_long_castle;
-    bool w_short_castle;
-    bool b_long_castle;
-    bool b_short_castle;
-    U64 en_passant_bitboards[2];
-    int captured_piece_index; // -1 if no piece was captured
-};
-
 void apply_move(game_state& state, move& move_to_apply, U64& zobrist_hash, zobrist_randoms &zobrist, move_undo& undo) {
     // apply a move object to a gamestate bitboard
 
@@ -907,6 +941,7 @@ void apply_move(game_state& state, move& move_to_apply, U64& zobrist_hash, zobri
     undo.w_short_castle = state.w_short_castle;
     undo.b_long_castle = state.b_long_castle;
     undo.b_short_castle = state.b_short_castle;
+    undo.en_passant = false;
     undo.en_passant_bitboards[0] = state.en_passant_bitboards[0];
     undo.en_passant_bitboards[1] = state.en_passant_bitboards[1];
     undo.captured_piece_index = -1;
@@ -917,42 +952,67 @@ void apply_move(game_state& state, move& move_to_apply, U64& zobrist_hash, zobri
 
     // add the piece to the to position
     state.piece_bitboards[move_to_apply.promotion_piece_index] |= 1ULL << move_to_apply.to_position;
-    zobrist_hash ^= zobrist.zobrist_piece_table[move_to_apply.to_position][move_to_apply.piece_index];
+    zobrist_hash ^= zobrist.zobrist_piece_table[move_to_apply.to_position][move_to_apply.promotion_piece_index];
+
+    //temp vizualization
+    //std::cout << "step 1" << std::endl;
+    //visualize_game_state_2(state);
 
     // remove potential captured piece
     // get opponent color
-    bool opponent_color = move_to_apply.piece_index >= 6;
+    bool opponent_color = move_to_apply.piece_index < 6;
 
     // remove captured opponent piece
     for (int i = 0; i < 6; i++) {
-        next_state.piece_bitboards[i + 6*opponent_color] &= ~(1ULL << move_to_apply.to_position);
+        // check if a capture happens
+        if (state.piece_bitboards[i + 6*opponent_color] & (1ULL << move_to_apply.to_position)) {
+            // remove captured piece
+            state.piece_bitboards[i + 6*opponent_color] &= ~(1ULL << move_to_apply.to_position);
+            zobrist_hash ^= zobrist.zobrist_piece_table[move_to_apply.to_position][i + 6*opponent_color];
+            undo.captured_piece_index = i + 6*opponent_color;
+        }
     }
+
+    //std::cout << "step 2" << std::endl;
+    //visualize_game_state_2(state);
 
     // remove captured en passant piece
     if (move_to_apply.piece_index == 0) {
-        if (next_state.en_passant_bitboards[1] & (1ULL << move_to_apply.to_position)) {
-            next_state.piece_bitboards[6] &= ~(1ULL << (move_to_apply.to_position - 8));
+        if (state.en_passant_bitboards[1] & (1ULL << move_to_apply.to_position)) {
+            state.piece_bitboards[6] &= ~(1ULL << (move_to_apply.to_position - 8));
+            zobrist_hash ^= zobrist.zobrist_piece_table[move_to_apply.to_position - 8][6];
+            undo.captured_piece_index = 6;
+            undo.en_passant = true;
         }
     }
     else if (move_to_apply.piece_index == 6) {
-        if (next_state.en_passant_bitboards[0] & (1ULL << move_to_apply.to_position)) {
-            next_state.piece_bitboards[0] &= ~(1ULL << (move_to_apply.to_position + 8));
+        if (state.en_passant_bitboards[0] & (1ULL << move_to_apply.to_position)) {
+            state.piece_bitboards[0] &= ~(1ULL << (move_to_apply.to_position + 8));
+            zobrist_hash ^= zobrist.zobrist_piece_table[move_to_apply.to_position + 8][0];
+            undo.captured_piece_index = 0;
+            undo.en_passant = true;
         }
     }
 
+    //std::cout << "step 3" << std::endl;
+    //visualize_game_state_2(state);
+
     // clear en passant bitboards
-    next_state.en_passant_bitboards[0] = 0;
-    next_state.en_passant_bitboards[1] = 0;
+    state.en_passant_bitboards[0] = 0;
+    state.en_passant_bitboards[1] = 0;
 
     // update en passant bitboards
     if (move_to_apply.en_passantable) {
         if (move_to_apply.piece_index == 0) {
-            next_state.en_passant_bitboards[0] = 1ULL << (move_to_apply.to_position - 8);
+            state.en_passant_bitboards[0] = 1ULL << (move_to_apply.to_position - 8);
         }
         else if (move_to_apply.piece_index == 6) {
-            next_state.en_passant_bitboards[1] = 1ULL << (move_to_apply.to_position + 8);
+            state.en_passant_bitboards[1] = 1ULL << (move_to_apply.to_position + 8);
         }
     }
+
+    //std::cout << "step 4" << std::endl;
+    //visualize_game_state_2(state);
 
     // castling rights
     if ((state.w_long_castle) && (move_to_apply.to_position == 0)) {
@@ -1045,6 +1105,74 @@ void apply_move(game_state& state, move& move_to_apply, U64& zobrist_hash, zobri
             // update rook part of the hash
             zobrist_hash ^= zobrist.zobrist_piece_table[63][9];
             zobrist_hash ^= zobrist.zobrist_piece_table[61][9];
+        }
+    }
+}
+
+void undo_move(game_state& state, move& move_to_undo, U64& zobrist_hash, zobrist_randoms &zobrist, move_undo& undo) {
+    // undo a move object to a gamestate bitboard
+
+    zobrist_hash = undo.zobrist_hash;
+    state.w_long_castle = undo.w_long_castle;
+    state.w_short_castle = undo.w_short_castle;
+    state.b_long_castle = undo.b_long_castle;
+    state.b_short_castle = undo.b_short_castle;
+    state.en_passant_bitboards[0] = undo.en_passant_bitboards[0];
+    state.en_passant_bitboards[1] = undo.en_passant_bitboards[1];
+
+    //if (undo.en_passant) {
+        //std::cout << "before undo" << std::endl;
+        //visualize_game_state_2(state);
+        //std::cout << "captured piece index" << undo.captured_piece_index << std::endl;
+    //}
+
+    // remove the piece from the to position
+    state.piece_bitboards[move_to_undo.promotion_piece_index] &= ~(1ULL << move_to_undo.to_position);
+
+    // add the piece to the from position
+    state.piece_bitboards[move_to_undo.piece_index] |= 1ULL << move_to_undo.from_position;
+
+    // captured pieces
+    if (undo.captured_piece_index != -1) {
+        // check for en passant
+        if (undo.en_passant) {
+            if (undo.captured_piece_index == 0) {
+                state.piece_bitboards[undo.captured_piece_index] |= 1ULL << (move_to_undo.to_position + 8);
+            }
+            else if (undo.captured_piece_index == 6) {
+                state.piece_bitboards[undo.captured_piece_index] |= 1ULL << (move_to_undo.to_position - 8);
+            }
+
+            //temp vizualization
+            //std::cout << "after undo" << std::endl;
+            //visualize_game_state_2(state);
+        }
+        else {
+            state.piece_bitboards[undo.captured_piece_index] |= 1ULL << move_to_undo.to_position;
+        }
+    }
+
+    // undo rook moves in castling
+    if (move_to_undo.castling) {
+        // white long castling
+        if (move_to_undo.to_position == 2) {
+            state.piece_bitboards[3] &= ~(1ULL << 3);
+            state.piece_bitboards[3] |= 1ULL << 0;
+        }
+        // black long castling
+        else if (move_to_undo.to_position == 58) {
+            state.piece_bitboards[9] &= ~(1ULL << 59);
+            state.piece_bitboards[9] |= 1ULL << 56;
+        }
+        // white short castling
+        else if (move_to_undo.to_position == 6) {
+            state.piece_bitboards[3] &= ~(1ULL << 5);
+            state.piece_bitboards[3] |= 1ULL << 7;
+        }
+        // black short castling
+        else if (move_to_undo.to_position == 62) {
+            state.piece_bitboards[9] &= ~(1ULL << 61);
+            state.piece_bitboards[9] |= 1ULL << 63;
         }
     }
 }

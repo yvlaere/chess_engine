@@ -27,6 +27,19 @@ struct game_state {
         b_short_castle(bsc) {}
     };
 
+struct zobrist_randoms {
+    std::array<std::array<U64, 12>, 64> zobrist_piece_table{};
+    U64 zobrist_black_to_move = 0;
+    U64 zobrist_w_long_castle = 0;
+    U64 zobrist_w_short_castle = 0;
+    U64 zobrist_b_long_castle = 0;
+    U64 zobrist_b_short_castle = 0;
+    std::array<U64, 8> zobrist_en_passant{};
+
+    // default constructor
+    zobrist_randoms() = default;
+};
+
 struct move {
     int piece_index;
     int from_position;
@@ -44,6 +57,19 @@ struct move {
        : piece_index(piece_index), from_position(from_position), to_position(to_position), 
          promotion_piece_index(promotion_piece_index), en_passantable(en_passantable), castling(castling) {}
 };
+
+struct move_undo {
+    U64 zobrist_hash;
+    bool w_long_castle;
+    bool w_short_castle;
+    bool b_long_castle;
+    bool b_short_castle;
+    bool en_passant;
+    U64 en_passant_bitboards[2];
+    int captured_piece_index; // -1 if no piece was captured
+};
+
+void visualize_game_state_2(const game_state& state);
 
 // usefull functions
 
@@ -112,7 +138,9 @@ int pseudo_legal_move_generator(std::array<move, 256>& moves,
     std::array<std::array<U64, 4096>, 64>& rook_attack_lookup_table, 
     std::array<U64, 64>& king_lookup_table,
     const U64& occupancy_bitboard);
-game_state apply_move(game_state& state, move& move_to_apply);
+U64 init_zobrist_hashing(game_state &state, zobrist_randoms &zobrist, bool color);
+void apply_move(game_state& state, move& move_to_apply, U64& zobrist_hash, zobrist_randoms &zobrist, move_undo& undo);
+void undo_move(game_state& state, move& move_to_undo, U64& zobrist_hash, zobrist_randoms &zobrist, move_undo& undo);
 bool pseudo_to_legal(game_state& state, bool color, 
     std::array<std::array<U64, 64>, 2>& pawn_move_lookup_table, 
     std::array<std::array<U64, 64>, 2>& pawn_attack_lookup_table, 

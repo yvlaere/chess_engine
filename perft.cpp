@@ -1,4 +1,6 @@
-#include "move_generation.h"
+#include "move_generation_2.h"
+#include <iostream>
+#include <array>
 
 // debugging functions
 
@@ -89,7 +91,10 @@ void perft(game_state& state, int depth, bool color,
     const U64& occupancy_bitboard,
     std::vector<uint64_t>& depth_nodes, int current_depth, 
     std::vector<uint64_t>& captures, std::vector<uint64_t>& promotions, 
-    std::vector<uint64_t>& castlings, std::array<int, 6>& piece_capture) {
+    std::vector<uint64_t>& castlings, std::array<int, 6>& piece_capture,
+    zobrist_randoms& zobrist, U64& zobrist_hash, 
+    std::array<std::array<move, 256>, 256>& moves_stack, 
+    std::array<move_undo, 256>& undo_stack) {
 
     if (depth == 0) {
         // depth_nodes[current_depth]++;
@@ -97,7 +102,7 @@ void perft(game_state& state, int depth, bool color,
     }
 
     // Generate pseudo-legal moves
-    std::array<move, 256> moves;
+    std::array<move, 256>& moves = moves_stack[current_depth];
     int move_count = pseudo_legal_move_generator(moves, 
         state, color, pawn_move_lookup_table, pawn_attack_lookup_table, 
         knight_lookup_table, bishop_magics, bishop_mask_lookup_table, 
@@ -105,21 +110,39 @@ void perft(game_state& state, int depth, bool color,
         rook_attack_lookup_table, king_lookup_table, 
         occupancy_bitboard);
 
+    //std::cout << "Current depth: " << current_depth << "Move count: " << move_count << std::endl;
+
     // iterate over all pseudo-legal moves
     for (int i = 0; i < move_count; i++) {
         if (moves[i].piece_index != -1) {
-            game_state new_state = apply_move(state, moves[i]);
+            move_undo& undo = undo_stack[current_depth];
 
+            //if (current_depth == 0) {
+                //std::cout << "before application" << std::endl;
+                //visualize_game_state(state);
+            //}
+
+            apply_move(state, moves[i], zobrist_hash, zobrist, undo);
+
+            //if (current_depth == 0) {
+                //std::cout << "after application" << std::endl;
+                //visualize_game_state(state);
+            //}
+            
             // Ensure move is legal (not putting king in check)
-            if (pseudo_to_legal(new_state, !color, pawn_move_lookup_table, pawn_attack_lookup_table, knight_lookup_table, bishop_magics, bishop_mask_lookup_table, bishop_attack_lookup_table, rook_magics, rook_mask_lookup_table, rook_attack_lookup_table, king_lookup_table, get_occupancy(new_state.piece_bitboards))) {
+            if (pseudo_to_legal(state, !color, pawn_move_lookup_table, pawn_attack_lookup_table, knight_lookup_table, bishop_magics, bishop_mask_lookup_table, bishop_attack_lookup_table, rook_magics, rook_mask_lookup_table, rook_attack_lookup_table, king_lookup_table, get_occupancy(state.piece_bitboards))) {
                 
                 // count captures
-                U64 new_occupancy_bitboard = get_occupancy(new_state.piece_bitboards);
+                U64 new_occupancy_bitboard = get_occupancy(state.piece_bitboards);
                 std::vector<int> old_count = get_set_bit_positions(occupancy_bitboard);
                 std::vector<int> new_count = get_set_bit_positions(new_occupancy_bitboard);
                 
                 if (old_count.size() != new_count.size()) {
                     captures[current_depth]++;
+                    //if (current_depth == 0) {
+                        //std::cout << "capture" << std::endl;
+                        //visualize_game_state(state);
+                    //}
                 }
                 if (current_depth == 0) {
                     piece_capture[moves[i].piece_index - 6*color]++;
@@ -131,19 +154,24 @@ void perft(game_state& state, int depth, bool color,
                     castlings[current_depth]++;
                 }
                 
-                perft(new_state, depth - 1, !color, pawn_move_lookup_table, 
+                perft(state, depth - 1, !color, pawn_move_lookup_table, 
                     pawn_attack_lookup_table, knight_lookup_table, bishop_magics, 
                     bishop_mask_lookup_table, bishop_attack_lookup_table, rook_magics, 
                     rook_mask_lookup_table, rook_attack_lookup_table, king_lookup_table, 
                     new_occupancy_bitboard, depth_nodes, current_depth + 1, captures, 
-                    promotions, castlings, piece_capture);
+                    promotions, castlings, piece_capture, zobrist, zobrist_hash,
+                    moves_stack, undo_stack);
                 depth_nodes[current_depth]++;
             }
+
+            // Undo the move
+            undo_move(state, moves[i], zobrist_hash, zobrist, undo);
         }
     }
 }
 
-int perft() {
+//rename to something else for inclusion in other scripts
+int main() {
 
     // initial game state
     // convention: least significant bit (rightmost bit) is A1
@@ -190,6 +218,16 @@ int perft() {
         bishop_attack_lookup_table, rook_magics, rook_mask_lookup_table,
         rook_attack_lookup_table, king_lookup_table);
 
+    // create zobrist randoms
+    zobrist_randoms zobrist;
+
+    // create move object array
+    //untill depth 256
+    std::array<std::array<move, 256>, 256> moves_stack;
+
+    // create move undo object array
+    std::array<move_undo, 256> undo_stack;
+    
     // initialize game state
     std::cout << "Position 1" << std::endl;
     visualize_game_state(initial_game_state);
@@ -234,7 +272,6 @@ int perft() {
     std::cout << "Position 6" << std::endl;
     visualize_game_state(game_state6);
 
-
     // perft
     std::vector<uint64_t> depth_nodes(6, 0);
     std::vector<uint64_t> captures(6, 0);
@@ -242,14 +279,16 @@ int perft() {
     std::vector<uint64_t> castlings(6, 0);
     std::array<int, 6> piece_capture = {0, 0, 0, 0, 0, 0};
 
-    game_state perft_state = initial_game_state;
+    game_state perft_state = game_state6;
+    U64 zobrist_hash = init_zobrist_hashing(perft_state, zobrist, false);
 
     perft(perft_state, 5, false, pawn_move_lookup_table, pawn_attack_lookup_table, 
           knight_lookup_table, bishop_magics, bishop_mask_lookup_table, 
           bishop_attack_lookup_table, rook_magics, rook_mask_lookup_table, 
           rook_attack_lookup_table, king_lookup_table, 
           get_occupancy(perft_state.piece_bitboards), depth_nodes, 0, 
-          captures, promotions, castlings, piece_capture);
+          captures, promotions, castlings, piece_capture, zobrist, zobrist_hash, 
+          moves_stack, undo_stack);
 
     // Print the perft results per depth
     for (int d = 0; d <= 5; d++) {
