@@ -1,4 +1,4 @@
-#include "move_generation_2.h"
+#include "move_generation.h"
 #include <iostream>
 #include <array>
 #include <chrono>
@@ -242,7 +242,7 @@ int main() {
     visualize_game_state(game_state6);
 
     // perft
-    game_state perft_state = initial_game_state;
+    game_state perft_state = game_state6;
     U64 zobrist_hash = init_zobrist_hashing(perft_state, zobrist, false);
     uint64_t node_count = 0;
 
