@@ -79,26 +79,25 @@ void visualize_game_state(const game_state& state) {
 // perft
 
 void perft(game_state& state, int depth, bool color, 
-    std::array<std::array<U64, 64>, 2>& pawn_move_lookup_table, 
-    std::array<std::array<U64, 64>, 2>& pawn_attack_lookup_table, 
+    std::array<U64, 128>& pawn_move_lookup_table, 
+    std::array<U64, 128>& pawn_attack_lookup_table, 
     std::array<U64, 64>& knight_lookup_table, 
     std::array<U64, 64>& bishop_magics, 
     std::array<U64, 64>& bishop_mask_lookup_table, 
-    std::array<std::array<U64, 4096>, 64>& bishop_attack_lookup_table, 
+    std::array<U64, 64>& bishop_mask_bit_count,
+    std::array<U64, 262144>& bishop_attack_lookup_table, 
     std::array<U64, 64>& rook_magics, 
     std::array<U64, 64>& rook_mask_lookup_table,
-    std::array<std::array<U64, 4096>, 64>& rook_attack_lookup_table, 
+    std::array<U64, 64>& rook_mask_bit_count,
+    std::array<U64, 262144>& rook_attack_lookup_table, 
     std::array<U64, 64>& king_lookup_table,
-    const U64& occupancy_bitboard,
-    std::vector<uint64_t>& depth_nodes, int current_depth, 
-    std::vector<uint64_t>& captures, std::vector<uint64_t>& promotions, 
-    std::vector<uint64_t>& castlings, std::array<int, 6>& piece_capture,
+    const U64& occupancy_bitboard, int current_depth, 
     zobrist_randoms& zobrist, U64& zobrist_hash, 
     std::array<std::array<move, 256>, 256>& moves_stack, 
-    std::array<move_undo, 256>& undo_stack) {
+    std::array<move_undo, 256>& undo_stack, uint64_t& node_count) {
 
     if (depth == 0) {
-        // depth_nodes[current_depth]++;
+        node_count++;
         return;
     }
 
@@ -106,63 +105,29 @@ void perft(game_state& state, int depth, bool color,
     std::array<move, 256>& moves = moves_stack[current_depth];
     int move_count = pseudo_legal_move_generator(moves, 
         state, color, pawn_move_lookup_table, pawn_attack_lookup_table, 
-        knight_lookup_table, bishop_magics, bishop_mask_lookup_table, 
-        bishop_attack_lookup_table, rook_magics, rook_mask_lookup_table, 
+        knight_lookup_table, bishop_magics, bishop_mask_lookup_table, bishop_mask_bit_count,
+        bishop_attack_lookup_table, rook_magics, rook_mask_lookup_table, rook_mask_bit_count,
         rook_attack_lookup_table, king_lookup_table, 
         occupancy_bitboard);
-
-    //std::cout << "Current depth: " << current_depth << "Move count: " << move_count << std::endl;
 
     // iterate over all pseudo-legal moves
     for (int i = 0; i < move_count; i++) {
         if (moves[i].piece_index != -1) {
+
             move_undo& undo = undo_stack[current_depth];
-
-            //if (current_depth == 0) {
-                //std::cout << "before application" << std::endl;
-                //visualize_game_state(state);
-            //}
-
             apply_move(state, moves[i], zobrist_hash, zobrist, undo);
-
-            //if (current_depth == 0) {
-                //std::cout << "after application" << std::endl;
-                //visualize_game_state(state);
-            //}
             
             // Ensure move is legal (not putting king in check)
-            if (pseudo_to_legal(state, !color, pawn_move_lookup_table, pawn_attack_lookup_table, knight_lookup_table, bishop_magics, bishop_mask_lookup_table, bishop_attack_lookup_table, rook_magics, rook_mask_lookup_table, rook_attack_lookup_table, king_lookup_table, get_occupancy(state.piece_bitboards))) {
+            if (pseudo_to_legal(state, !color, pawn_move_lookup_table, pawn_attack_lookup_table, knight_lookup_table, bishop_magics, bishop_mask_lookup_table, bishop_mask_bit_count, bishop_attack_lookup_table, rook_magics, rook_mask_lookup_table, rook_mask_bit_count, rook_attack_lookup_table, king_lookup_table, get_occupancy(state.piece_bitboards))) {
                 
-                // count captures
                 U64 new_occupancy_bitboard = get_occupancy(state.piece_bitboards);
-                std::vector<int> old_count = get_set_bit_positions(occupancy_bitboard);
-                std::vector<int> new_count = get_set_bit_positions(new_occupancy_bitboard);
-                
-                if (old_count.size() != new_count.size()) {
-                    captures[current_depth]++;
-                    //if (current_depth == 0) {
-                        //std::cout << "capture" << std::endl;
-                        //visualize_game_state(state);
-                    //}
-                }
-                if (current_depth == 0) {
-                    piece_capture[moves[i].piece_index - 6*color]++;
-                }
-                if (moves[i].promotion_piece_index != moves[i].piece_index) {
-                    promotions[current_depth]++;
-                }
-                if (moves[i].castling) {
-                    castlings[current_depth]++;
-                }
-                
+
                 perft(state, depth - 1, !color, pawn_move_lookup_table, 
                     pawn_attack_lookup_table, knight_lookup_table, bishop_magics, 
-                    bishop_mask_lookup_table, bishop_attack_lookup_table, rook_magics, 
-                    rook_mask_lookup_table, rook_attack_lookup_table, king_lookup_table, 
-                    new_occupancy_bitboard, depth_nodes, current_depth + 1, captures, 
-                    promotions, castlings, piece_capture, zobrist, zobrist_hash,
-                    moves_stack, undo_stack);
-                depth_nodes[current_depth]++;
+                    bishop_mask_lookup_table, bishop_mask_bit_count, bishop_attack_lookup_table, rook_magics, 
+                    rook_mask_lookup_table, rook_mask_bit_count, rook_attack_lookup_table, king_lookup_table, 
+                    new_occupancy_bitboard, current_depth + 1, zobrist, zobrist_hash,
+                    moves_stack, undo_stack, node_count);
             }
 
             // Undo the move
@@ -176,21 +141,21 @@ int main() {
 
     // initial game state
     // convention: least significant bit (rightmost bit) is A1
-    U64 w_pawn = 65280;
-    U64 w_knight = 66;
-    U64 w_bishop = 36;
-    U64 w_rook = 129;
-    U64 w_queen = 8;
-    U64 w_king = 16;
-    U64 b_pawn = 71776119061217280;
-    U64 b_knight = 4755801206503243776;
-    U64 b_bishop = 2594073385365405696;
-    U64 b_rook = 9295429630892703744;
-    U64 b_queen = 576460752303423488;
-    U64 b_king = 1152921504606846976;
+    U64 w_pawn = 65280ULL;
+    U64 w_knight = 66ULL;
+    U64 w_bishop = 36ULL;
+    U64 w_rook = 129ULL;
+    U64 w_queen = 8ULL;
+    U64 w_king = 16ULL;
+    U64 b_pawn = 71776119061217280ULL;
+    U64 b_knight = 4755801206503243776ULL;
+    U64 b_bishop = 2594073385365405696ULL;
+    U64 b_rook = 9295429630892703744ULL;
+    U64 b_queen = 576460752303423488ULL;
+    U64 b_king = 1152921504606846976ULL;
 
-    U64 w_en_passant = 0;
-    U64 b_en_passant = 0;
+    U64 w_en_passant = 0ULL;
+    U64 b_en_passant = 0ULL;
 
     bool w_long_castle = true;
     bool w_short_castle = true;
@@ -203,20 +168,23 @@ int main() {
     game_state initial_game_state(piece_bitboards, en_passant_bitboards, w_long_castle, w_short_castle, b_long_castle, b_short_castle);
 
     // create lookup tables
-    std::array<std::array<U64, 64>, 2> pawn_move_lookup_table;
-    std::array<std::array<U64, 64>, 2> pawn_attack_lookup_table;
-    std::array<U64, 64> knight_lookup_table;
+    std::array<U64, 128> pawn_move_lookup_table;
+    std::array<U64, 128> pawn_attack_lookup_table; 
+    std::array<U64, 64> knight_lookup_table; 
     std::array<U64, 64> bishop_magics;
-    std::array<U64, 64> bishop_mask_lookup_table;
-    std::array<std::array<U64, 4096>, 64> bishop_attack_lookup_table;
-    std::array<U64, 64> rook_magics;
+    std::array<U64, 64> bishop_mask_lookup_table; 
+    std::array<U64, 64> bishop_mask_bit_count;
+    std::array<U64, 262144> bishop_attack_lookup_table;
+    std::array<U64, 64> rook_magics; 
     std::array<U64, 64> rook_mask_lookup_table;
-    std::array<std::array<U64, 4096>, 64> rook_attack_lookup_table;
+    std::array<U64, 64> rook_mask_bit_count;
+    std::array<U64, 262144> rook_attack_lookup_table;
     std::array<U64, 64> king_lookup_table;
+    
 
     generate_lookup_tables(pawn_move_lookup_table, pawn_attack_lookup_table, 
-        knight_lookup_table, bishop_magics, bishop_mask_lookup_table, 
-        bishop_attack_lookup_table, rook_magics, rook_mask_lookup_table,
+        knight_lookup_table, bishop_magics, bishop_mask_lookup_table, bishop_mask_bit_count,
+        bishop_attack_lookup_table, rook_magics, rook_mask_lookup_table, rook_mask_bit_count,
         rook_attack_lookup_table, king_lookup_table);
 
     // create zobrist randoms
@@ -274,38 +242,24 @@ int main() {
     visualize_game_state(game_state6);
 
     // perft
-    std::vector<uint64_t> depth_nodes(6, 0);
-    std::vector<uint64_t> captures(6, 0);
-    std::vector<uint64_t> promotions(6, 0);
-    std::vector<uint64_t> castlings(6, 0);
-    std::array<int, 6> piece_capture = {0, 0, 0, 0, 0, 0};
-
     game_state perft_state = initial_game_state;
     U64 zobrist_hash = init_zobrist_hashing(perft_state, zobrist, false);
+    uint64_t node_count = 0;
 
     auto start = std::chrono::high_resolution_clock::now();
 
-    perft(perft_state, 5, false, pawn_move_lookup_table, pawn_attack_lookup_table, 
-          knight_lookup_table, bishop_magics, bishop_mask_lookup_table, 
-          bishop_attack_lookup_table, rook_magics, rook_mask_lookup_table, 
+    perft(perft_state, 6, false, pawn_move_lookup_table, pawn_attack_lookup_table, 
+          knight_lookup_table, bishop_magics, bishop_mask_lookup_table, bishop_mask_bit_count,
+          bishop_attack_lookup_table, rook_magics, rook_mask_lookup_table, rook_mask_bit_count,
           rook_attack_lookup_table, king_lookup_table, 
-          get_occupancy(perft_state.piece_bitboards), depth_nodes, 0, 
-          captures, promotions, castlings, piece_capture, zobrist, zobrist_hash, 
-          moves_stack, undo_stack);
+          get_occupancy(perft_state.piece_bitboards), 0, zobrist, zobrist_hash, 
+          moves_stack, undo_stack, node_count);
 
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end - start;
-
     std::cout << "Time taken: " << duration.count() << " ms" << std::endl;
 
-    // Print the perft results per depth
-    for (int d = 0; d <= 5; d++) {
-        std::cout << "Nodes at depth " << d << ": " << depth_nodes[d] << " Captures: " << captures[d] << " Promotions: " << promotions[d] << " Castlings: " << castlings[d] << std::endl;
-    }
-
-    for (int i = 0; i < 6; i++) {
-        std::cout << "Piece: " << i << " Captures: " << piece_capture[i] << std::endl;
-    }
+    std::cout << "Total nodes: " << node_count << std::endl;
 
     return 0;
 }

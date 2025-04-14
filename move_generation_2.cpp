@@ -1,58 +1,4 @@
-# include "move_generation_2.h"
-
-void visualize_game_state_2(const game_state& state) {
-    const char* piece_symbols = "PNBRQKpnbrqk";
-
-    char board[8][8] = {};
-
-    // Initialize board with empty spaces
-    for (int r = 0; r < 8; ++r)
-        for (int c = 0; c < 8; ++c)
-            board[r][c] = '.';
-
-    // Fill the board with pieces
-    for (int i = 0; i < 12; ++i) {
-        U64 bitboard = state.piece_bitboards[i];
-        for (int square = 0; square < 64; ++square) {
-            if (bitboard & (1ULL << square)) {
-                int row = 7 - (square / 8);
-                int col = square % 8;
-                board[row][col] = piece_symbols[i];
-            }
-        }
-    }
-
-    // Mark en passant squares
-    for (int i = 0; i < 2; ++i) {
-        U64 ep_board = state.en_passant_bitboards[i];
-        for (int square = 0; square < 64; ++square) {
-            if (ep_board & (1ULL << square)) {
-                int row = 7 - (square / 8);
-                int col = square % 8;
-                board[row][col] = '*';  // En passant target square
-            }
-        }
-    }
-
-    // Print the board
-    std::cout << "  a b c d e f g h\n";
-    std::cout << "  ----------------\n";
-    for (int r = 0; r < 8; ++r) {
-        std::cout << (8 - r) << "| ";
-        for (int c = 0; c < 8; ++c) {
-            std::cout << board[r][c] << ' ';
-        }
-        std::cout << "|\n";
-    }
-    std::cout << "  ----------------\n";
-
-    // Print castling rights
-    std::cout << "Castling rights: "
-              << (state.w_long_castle ? "Q" : "-")
-              << (state.w_short_castle ? "K" : "-")
-              << (state.b_long_castle ? "q" : "-")
-              << (state.b_short_castle ? "k" : "-") << "\n";
-}
+#include "move_generation_2.h"
 
 // usefull functions
 
@@ -103,7 +49,7 @@ std::vector<int> get_set_bit_positions(U64 bitboard) {
 }
 
 // this can not return a vector, because it is called during the move generation
-int pop_lsb(U64& bitboard) {
+inline int pop_lsb(U64& bitboard) {
     // function to pop the least significant set bit in a U64 bitboard
     // the bitboard is passed by reference, so it gets modified
 
@@ -115,12 +61,12 @@ int pop_lsb(U64& bitboard) {
     return lsb_index;
 }
 
-int count_set_bits(U64 bitboard) {
+inline int count_set_bits(U64 bitboard) {
     // returns the number of set bits in the bitboard
     return __builtin_popcountll(bitboard);
 }
 
-bool is_bit_set(U64 bitboard, int position) {
+inline bool is_bit_set(U64 bitboard, int position) {
     // returns true if the bit at the given position is set in the bitboard
     return bitboard & (1ULL << position);
 }
@@ -165,7 +111,7 @@ U64 generate_candidate_magic() {
     return dist(rng) & dist(rng) & dist(rng);
 }
 
-void generate_magics(int position, U64 mask_bitboard, std::vector<U64> blocker_boards, std::vector<U64> attack_bitboards, U64& candidate_magic, std::array<U64, 4096>& lookup_table) {
+void generate_magics(int position, U64 mask_bitboard, std::vector<U64> blocker_boards, std::vector<U64> attack_bitboards, U64& candidate_magic, std::array<U64, 262144>& lookup_table) {
     // generate candidate magic numbers and lookup tables for a given position
 
     // initialize
@@ -179,17 +125,17 @@ void generate_magics(int position, U64 mask_bitboard, std::vector<U64> blocker_b
         bool valid = true;
 
         // initialize the lookup table
-        for (int j = 0; j < 4096; j++) {
-            lookup_table[j] = 0;
+        for (int j = 0; j < MAGIC_TABLE_SIZE; j++) {
+            lookup_table[position*MAGIC_TABLE_SIZE + j] = 0;
         }
 
         // fill the lookup table
         for (int j = 0; j < blocker_boards.size(); j++) {
             U64 index = (blocker_boards[j] * candidate_magic) >> (64 - index_bits);
-            if (lookup_table[index] == 0) {
-                lookup_table[index] = attack_bitboards[j];
+            if (lookup_table[position*MAGIC_TABLE_SIZE + index] == 0) {
+                lookup_table[position*MAGIC_TABLE_SIZE + index] = attack_bitboards[j];
             }
-            else if (lookup_table[index] != attack_bitboards[j]) {
+            else if (lookup_table[position*MAGIC_TABLE_SIZE + index] != attack_bitboards[j]) {
                 valid = false;
                 break;
             }
@@ -575,15 +521,17 @@ U64 get_king_attack(int position) {
 // move generation
 
 U64 attacked(game_state state, bool color, 
-    std::array<std::array<U64, 64>, 2>& pawn_move_lookup_table, 
-    std::array<std::array<U64, 64>, 2>& pawn_attack_lookup_table, 
+    std::array<U64, 128>& pawn_move_lookup_table, 
+    std::array<U64, 128>& pawn_attack_lookup_table, 
     std::array<U64, 64>& knight_lookup_table, 
     std::array<U64, 64>& bishop_magics, 
     std::array<U64, 64>& bishop_mask_lookup_table, 
-    std::array<std::array<U64, 4096>, 64>& bishop_attack_lookup_table, 
+    std::array<U64, 64>& bishop_mask_bit_count,
+    std::array<U64, 262144>& bishop_attack_lookup_table, 
     std::array<U64, 64>& rook_magics, 
     std::array<U64, 64>& rook_mask_lookup_table,
-    std::array<std::array<U64, 4096>, 64>& rook_attack_lookup_table, 
+    std::array<U64, 64>& rook_mask_bit_count,
+    std::array<U64, 262144>& rook_attack_lookup_table, 
     std::array<U64, 64>& king_lookup_table,
     const U64& occupancy_bitboard) {
     // return a bitboard of all attacked positions by the given color
@@ -606,7 +554,7 @@ U64 attacked(game_state state, bool color,
             switch (i) {
                 // pawn
                 case 0: {
-                    possible_moves = pawn_attack_lookup_table[color][position];
+                    possible_moves = pawn_attack_lookup_table[position + NUM_SQUARES*color];
                     break;
                 }
 
@@ -619,16 +567,16 @@ U64 attacked(game_state state, bool color,
                 // bishop
                 case 2: {
                     U64 bishop_blocker_bitboard = bishop_mask_lookup_table[position] & occupancy_bitboard;
-                    int index = (bishop_blocker_bitboard * bishop_magics[position]) >> (64 - count_set_bits(bishop_mask_lookup_table[position]));
-                    possible_moves = bishop_attack_lookup_table[position][index];
+                    int index = (bishop_blocker_bitboard * bishop_magics[position]) >> (64 - bishop_mask_bit_count[position]);
+                    possible_moves = bishop_attack_lookup_table[ position*MAGIC_TABLE_SIZE + index];
                     break;
                 }
 
                 // rook
                 case 3: {
                     U64 rook_blocker_bitboard = rook_mask_lookup_table[position] & occupancy_bitboard;
-                    int index = (rook_blocker_bitboard * rook_magics[position]) >> (64 - count_set_bits(rook_mask_lookup_table[position]));
-                    possible_moves = rook_attack_lookup_table[position][index];
+                    int index = (rook_blocker_bitboard * rook_magics[position]) >> (64 - rook_mask_bit_count[position]);
+                    possible_moves = rook_attack_lookup_table[ position*MAGIC_TABLE_SIZE + index];
                     break;
                 }
                 
@@ -636,13 +584,13 @@ U64 attacked(game_state state, bool color,
                 case 4: {
                     // bishop aspect
                     U64 bishop_blocker_bitboard = bishop_mask_lookup_table[position] & occupancy_bitboard;
-                    int index = (bishop_blocker_bitboard * bishop_magics[position]) >> (64 - count_set_bits(bishop_mask_lookup_table[position]));
-                    U64 possible_bishop_moves = bishop_attack_lookup_table[position][index];
+                    int index = (bishop_blocker_bitboard * bishop_magics[position]) >> (64 - bishop_mask_bit_count[position]);
+                    U64 possible_bishop_moves = bishop_attack_lookup_table[ position*MAGIC_TABLE_SIZE + index];
 
                     // rook aspect
                     U64 rook_blocker_bitboard = rook_mask_lookup_table[position] & occupancy_bitboard;
-                    index = (rook_blocker_bitboard * rook_magics[position]) >> (64 - count_set_bits(rook_mask_lookup_table[position]));
-                    U64 possible_rook_moves = rook_attack_lookup_table[position][index];
+                    index = (rook_blocker_bitboard * rook_magics[position]) >> (64 - rook_mask_bit_count[position]);
+                    U64 possible_rook_moves = rook_attack_lookup_table[ position*MAGIC_TABLE_SIZE + index];
                     
                     //combine
                     possible_moves = possible_bishop_moves | possible_rook_moves;
@@ -665,15 +613,17 @@ U64 attacked(game_state state, bool color,
 }
 
 int pseudo_legal_move_generator(std::array<move, 256>& moves, game_state& state, bool color, 
-    std::array<std::array<U64, 64>, 2>& pawn_move_lookup_table, 
-    std::array<std::array<U64, 64>, 2>& pawn_attack_lookup_table, 
+    std::array<U64, 128>& pawn_move_lookup_table, 
+    std::array<U64, 128>& pawn_attack_lookup_table, 
     std::array<U64, 64>& knight_lookup_table, 
     std::array<U64, 64>& bishop_magics, 
     std::array<U64, 64>& bishop_mask_lookup_table, 
-    std::array<std::array<U64, 4096>, 64>& bishop_attack_lookup_table, 
+    std::array<U64, 64>& bishop_mask_bit_count,
+    std::array<U64, 262144>& bishop_attack_lookup_table, 
     std::array<U64, 64>& rook_magics, 
     std::array<U64, 64>& rook_mask_lookup_table,
-    std::array<std::array<U64, 4096>, 64>& rook_attack_lookup_table, 
+    std::array<U64, 64>& rook_mask_bit_count,
+    std::array<U64, 262144>& rook_attack_lookup_table, 
     std::array<U64, 64>& king_lookup_table,
     const U64& occupancy_bitboard) {
     // generate all pseudo legal moves for the given color in the given game state
@@ -696,6 +646,7 @@ int pseudo_legal_move_generator(std::array<move, 256>& moves, game_state& state,
             U64 possible_moves = 0;
             bool promotion = false;
             bool en_passantable = false;
+
             switch (i) {
                 // pawn
                 case 0: {
@@ -705,7 +656,7 @@ int pseudo_legal_move_generator(std::array<move, 256>& moves, game_state& state,
                     // check if pawn is not blocked
                     if (!(occupancy_bitboard & (1ULL << position + 8 - 16*color))) {
                         // get normal pawn moves
-                        pawn_move_bitboard = pawn_move_lookup_table[color][position];
+                        pawn_move_bitboard = pawn_move_lookup_table[position + NUM_SQUARES*color];
                         // only keep moves that are not blocked
                         pawn_move_bitboard = pawn_move_bitboard & ~occupancy_bitboard;
 
@@ -715,7 +666,7 @@ int pseudo_legal_move_generator(std::array<move, 256>& moves, game_state& state,
                     }
 
                     // get pawn attack moves
-                    U64 pawn_attack_bitboard = pawn_attack_lookup_table[color][position];
+                    U64 pawn_attack_bitboard = pawn_attack_lookup_table[position + NUM_SQUARES*color];
                     // only keep moves that capture something
                     pawn_attack_bitboard = pawn_attack_bitboard & (occupancy_bitboard | state.en_passant_bitboards[!color]);
                     
@@ -737,17 +688,18 @@ int pseudo_legal_move_generator(std::array<move, 256>& moves, game_state& state,
 
                 // bishop
                 case 2: {
+                    
                     U64 bishop_blocker_bitboard = bishop_mask_lookup_table[position] & occupancy_bitboard;
-                    int index = (bishop_blocker_bitboard * bishop_magics[position]) >> (64 - count_set_bits(bishop_mask_lookup_table[position]));
-                    possible_moves = bishop_attack_lookup_table[position][index];
+                    int index = (bishop_blocker_bitboard * bishop_magics[position]) >> (64 - bishop_mask_bit_count[position]);
+                    possible_moves = bishop_attack_lookup_table[position*MAGIC_TABLE_SIZE + index];
                     break;
                 }
 
                 // rook
                 case 3: {
                     U64 rook_blocker_bitboard = rook_mask_lookup_table[position] & occupancy_bitboard;
-                    int index = (rook_blocker_bitboard * rook_magics[position]) >> (64 - count_set_bits(rook_mask_lookup_table[position]));
-                    possible_moves = rook_attack_lookup_table[position][index];
+                    int index = (rook_blocker_bitboard * rook_magics[position]) >> (64 - rook_mask_bit_count[position]);
+                    possible_moves = rook_attack_lookup_table[position*MAGIC_TABLE_SIZE + index];
                     break;
                 }
                 
@@ -755,13 +707,13 @@ int pseudo_legal_move_generator(std::array<move, 256>& moves, game_state& state,
                 case 4: {
                     // bishop aspect
                     U64 bishop_blocker_bitboard = bishop_mask_lookup_table[position] & occupancy_bitboard;
-                    int index = (bishop_blocker_bitboard * bishop_magics[position]) >> (64 - count_set_bits(bishop_mask_lookup_table[position]));
-                    U64 possible_bishop_moves = bishop_attack_lookup_table[position][index];
+                    int index = (bishop_blocker_bitboard * bishop_magics[position]) >> (64 - bishop_mask_bit_count[position]);
+                    U64 possible_bishop_moves = bishop_attack_lookup_table[position*MAGIC_TABLE_SIZE + index];
 
                     // rook aspect
                     U64 rook_blocker_bitboard = rook_mask_lookup_table[position] & occupancy_bitboard;
-                    index = (rook_blocker_bitboard * rook_magics[position]) >> (64 - count_set_bits(rook_mask_lookup_table[position]));
-                    U64 possible_rook_moves = rook_attack_lookup_table[position][index];
+                    index = (rook_blocker_bitboard * rook_magics[position]) >> (64 - rook_mask_bit_count[position]);
+                    U64 possible_rook_moves = rook_attack_lookup_table[position*MAGIC_TABLE_SIZE + index];
                     
                     //combine
                     possible_moves = possible_bishop_moves | possible_rook_moves;
@@ -842,7 +794,7 @@ int pseudo_legal_move_generator(std::array<move, 256>& moves, game_state& state,
     // long castle
     if (long_castle) {
         if (!(occupancy_bitboard & long_castle_occupation_mask)) {
-            U64 attacked_bitboard = attacked(state, !color, pawn_move_lookup_table, pawn_attack_lookup_table, knight_lookup_table, bishop_magics, bishop_mask_lookup_table, bishop_attack_lookup_table, rook_magics, rook_mask_lookup_table, rook_attack_lookup_table, king_lookup_table, occupancy_bitboard);
+            U64 attacked_bitboard = attacked(state, !color, pawn_move_lookup_table, pawn_attack_lookup_table, knight_lookup_table, bishop_magics, bishop_mask_lookup_table, bishop_mask_bit_count, bishop_attack_lookup_table , rook_magics, rook_mask_lookup_table, rook_mask_bit_count, rook_attack_lookup_table, king_lookup_table, occupancy_bitboard);
             if (!(attacked_bitboard & long_castle_check_mask)) {
                 moves[move_index] = move(5 + 6*color, 4 + 56*color, 2 + 56*color, 5 + 6*color, false, true);
                 move_index++;
@@ -853,7 +805,7 @@ int pseudo_legal_move_generator(std::array<move, 256>& moves, game_state& state,
     // short castle
     if (short_castle) {
         if (!(occupancy_bitboard & short_castle_occupation_mask)) {
-            U64 attacked_bitboard = attacked(state, !color, pawn_move_lookup_table, pawn_attack_lookup_table, knight_lookup_table, bishop_magics, bishop_mask_lookup_table, bishop_attack_lookup_table, rook_magics, rook_mask_lookup_table, rook_attack_lookup_table, king_lookup_table, occupancy_bitboard);
+            U64 attacked_bitboard = attacked(state, !color, pawn_move_lookup_table, pawn_attack_lookup_table, knight_lookup_table, bishop_magics, bishop_mask_lookup_table, bishop_mask_bit_count, bishop_attack_lookup_table, rook_magics, rook_mask_lookup_table, rook_mask_bit_count, rook_attack_lookup_table, king_lookup_table, occupancy_bitboard);
             if (!(attacked_bitboard & short_castle_check_mask)) {
                 moves[move_index] = move(5 + 6*color, 4 + 56*color, 6 + 56*color, 5 + 6*color, false, true);
                 move_index++;
@@ -875,9 +827,10 @@ U64 init_zobrist_hashing(game_state &state, zobrist_randoms &zobrist, bool color
     static std::uniform_int_distribution<uint64_t> dist(0, UINT64_MAX);
 
     // fill zobrist randoms piece table
-    for (int i = 0; i < 64; ++i) {
-        for (int j = 0; j < 12; ++j) {
-            zobrist.zobrist_piece_table[i][j] = dist(rng);
+    // position*NUM_PIECES + piece_index
+    for (int i = 0; i < NUM_SQUARES; ++i) {
+        for (int j = 0; j < NUM_PIECES; ++j) {
+            zobrist.zobrist_piece_table[i*NUM_PIECES + j] = dist(rng);
         }
     }
 
@@ -894,11 +847,11 @@ U64 init_zobrist_hashing(game_state &state, zobrist_randoms &zobrist, bool color
     // initialize the hash
     U64 hash = 0;
     // hash the pieces
-    for (int i = 0; i < 12; ++i) {
+    for (int i = 0; i < NUM_PIECES; ++i) {
         U64 bb = state.piece_bitboards[i];
         while (bb) {
-            int square = __builtin_ctzll(bb);
-            hash ^= zobrist.zobrist_piece_table[square][i];
+            int position = __builtin_ctzll(bb);
+            hash ^= zobrist.zobrist_piece_table[position*NUM_PIECES + i];
             bb &= bb - 1;
         }
     }
@@ -948,15 +901,11 @@ void apply_move(game_state& state, move& move_to_apply, U64& zobrist_hash, zobri
 
     // remove the piece from the from position
     state.piece_bitboards[move_to_apply.piece_index] &= ~(1ULL << move_to_apply.from_position);
-    zobrist_hash ^= zobrist.zobrist_piece_table[move_to_apply.from_position][move_to_apply.piece_index];
+    zobrist_hash ^= zobrist.zobrist_piece_table[move_to_apply.from_position*NUM_PIECES + move_to_apply.piece_index];
 
     // add the piece to the to position
     state.piece_bitboards[move_to_apply.promotion_piece_index] |= 1ULL << move_to_apply.to_position;
-    zobrist_hash ^= zobrist.zobrist_piece_table[move_to_apply.to_position][move_to_apply.promotion_piece_index];
-
-    //temp vizualization
-    //std::cout << "step 1" << std::endl;
-    //visualize_game_state_2(state);
+    zobrist_hash ^= zobrist.zobrist_piece_table[move_to_apply.from_position*NUM_PIECES + move_to_apply.piece_index];
 
     // remove potential captured piece
     // get opponent color
@@ -968,19 +917,16 @@ void apply_move(game_state& state, move& move_to_apply, U64& zobrist_hash, zobri
         if (state.piece_bitboards[i + 6*opponent_color] & (1ULL << move_to_apply.to_position)) {
             // remove captured piece
             state.piece_bitboards[i + 6*opponent_color] &= ~(1ULL << move_to_apply.to_position);
-            zobrist_hash ^= zobrist.zobrist_piece_table[move_to_apply.to_position][i + 6*opponent_color];
+            zobrist_hash ^= zobrist.zobrist_piece_table[move_to_apply.to_position*NUM_PIECES + (i + 6*opponent_color)];
             undo.captured_piece_index = i + 6*opponent_color;
         }
     }
-
-    //std::cout << "step 2" << std::endl;
-    //visualize_game_state_2(state);
 
     // remove captured en passant piece
     if (move_to_apply.piece_index == 0) {
         if (state.en_passant_bitboards[1] & (1ULL << move_to_apply.to_position)) {
             state.piece_bitboards[6] &= ~(1ULL << (move_to_apply.to_position - 8));
-            zobrist_hash ^= zobrist.zobrist_piece_table[move_to_apply.to_position - 8][6];
+            zobrist_hash ^= zobrist.zobrist_piece_table[(move_to_apply.to_position - 8)*NUM_PIECES + 6];
             undo.captured_piece_index = 6;
             undo.en_passant = true;
         }
@@ -988,14 +934,11 @@ void apply_move(game_state& state, move& move_to_apply, U64& zobrist_hash, zobri
     else if (move_to_apply.piece_index == 6) {
         if (state.en_passant_bitboards[0] & (1ULL << move_to_apply.to_position)) {
             state.piece_bitboards[0] &= ~(1ULL << (move_to_apply.to_position + 8));
-            zobrist_hash ^= zobrist.zobrist_piece_table[move_to_apply.to_position + 8][0];
+            zobrist_hash ^= zobrist.zobrist_piece_table[(move_to_apply.to_position + 8)*NUM_PIECES + 0];
             undo.captured_piece_index = 0;
             undo.en_passant = true;
         }
     }
-
-    //std::cout << "step 3" << std::endl;
-    //visualize_game_state_2(state);
 
     // clear en passant bitboards
     state.en_passant_bitboards[0] = 0;
@@ -1010,9 +953,6 @@ void apply_move(game_state& state, move& move_to_apply, U64& zobrist_hash, zobri
             state.en_passant_bitboards[1] = 1ULL << (move_to_apply.to_position + 8);
         }
     }
-
-    //std::cout << "step 4" << std::endl;
-    //visualize_game_state_2(state);
 
     // castling rights
     if ((state.w_long_castle) && (move_to_apply.to_position == 0)) {
@@ -1079,32 +1019,32 @@ void apply_move(game_state& state, move& move_to_apply, U64& zobrist_hash, zobri
             state.piece_bitboards[3] &= ~(1ULL << 0);
             state.piece_bitboards[3] |= 1ULL << 3;
             // update rook part of the hash
-            zobrist_hash ^= zobrist.zobrist_piece_table[0][3];
-            zobrist_hash ^= zobrist.zobrist_piece_table[3][3];
+            zobrist_hash ^= zobrist.zobrist_piece_table[0*NUM_PIECES + 3];
+            zobrist_hash ^= zobrist.zobrist_piece_table[3*NUM_PIECES + 3];
         }
         // black long castling
         else if (move_to_apply.to_position == 58) {
             state.piece_bitboards[9] &= ~(1ULL << 56);
             state.piece_bitboards[9] |= 1ULL << 59;
             // update rook part of the hash
-            zobrist_hash ^= zobrist.zobrist_piece_table[56][9];
-            zobrist_hash ^= zobrist.zobrist_piece_table[59][9];
+            zobrist_hash ^= zobrist.zobrist_piece_table[56*NUM_PIECES + 9];
+            zobrist_hash ^= zobrist.zobrist_piece_table[59*NUM_PIECES + 9];
         }
         // white short castling
         else if (move_to_apply.to_position == 6) {
             state.piece_bitboards[3] &= ~(1ULL << 7);
             state.piece_bitboards[3] |= 1ULL << 5;
             // update rook part of the hash
-            zobrist_hash ^= zobrist.zobrist_piece_table[7][3];
-            zobrist_hash ^= zobrist.zobrist_piece_table[5][3];
+            zobrist_hash ^= zobrist.zobrist_piece_table[7*NUM_PIECES + 3];
+            zobrist_hash ^= zobrist.zobrist_piece_table[5*NUM_PIECES + 3];
         }
         // black short castling
         else if (move_to_apply.to_position == 62) {
             state.piece_bitboards[9] &= ~(1ULL << 63);
             state.piece_bitboards[9] |= 1ULL << 61;
             // update rook part of the hash
-            zobrist_hash ^= zobrist.zobrist_piece_table[63][9];
-            zobrist_hash ^= zobrist.zobrist_piece_table[61][9];
+            zobrist_hash ^= zobrist.zobrist_piece_table[63*NUM_PIECES + 9];
+            zobrist_hash ^= zobrist.zobrist_piece_table[61*NUM_PIECES + 9];
         }
     }
 }
@@ -1119,12 +1059,6 @@ void undo_move(game_state& state, move& move_to_undo, U64& zobrist_hash, zobrist
     state.b_short_castle = undo.b_short_castle;
     state.en_passant_bitboards[0] = undo.en_passant_bitboards[0];
     state.en_passant_bitboards[1] = undo.en_passant_bitboards[1];
-
-    //if (undo.en_passant) {
-        //std::cout << "before undo" << std::endl;
-        //visualize_game_state_2(state);
-        //std::cout << "captured piece index" << undo.captured_piece_index << std::endl;
-    //}
 
     // remove the piece from the to position
     state.piece_bitboards[move_to_undo.promotion_piece_index] &= ~(1ULL << move_to_undo.to_position);
@@ -1142,10 +1076,6 @@ void undo_move(game_state& state, move& move_to_undo, U64& zobrist_hash, zobrist
             else if (undo.captured_piece_index == 6) {
                 state.piece_bitboards[undo.captured_piece_index] |= 1ULL << (move_to_undo.to_position - 8);
             }
-
-            //temp vizualization
-            //std::cout << "after undo" << std::endl;
-            //visualize_game_state_2(state);
         }
         else {
             state.piece_bitboards[undo.captured_piece_index] |= 1ULL << move_to_undo.to_position;
@@ -1178,60 +1108,59 @@ void undo_move(game_state& state, move& move_to_undo, U64& zobrist_hash, zobrist
 }
 
 bool pseudo_to_legal(game_state& state, bool color, 
-    std::array<std::array<U64, 64>, 2>& pawn_move_lookup_table, 
-    std::array<std::array<U64, 64>, 2>& pawn_attack_lookup_table, 
+    std::array<U64, 128>& pawn_move_lookup_table, 
+    std::array<U64, 128>& pawn_attack_lookup_table, 
     std::array<U64, 64>& knight_lookup_table, 
     std::array<U64, 64>& bishop_magics, 
     std::array<U64, 64>& bishop_mask_lookup_table, 
-    std::array<std::array<U64, 4096>, 64>& bishop_attack_lookup_table, 
+    std::array<U64, 64>& bishop_mask_bit_count,
+    std::array<U64, 262144>& bishop_attack_lookup_table, 
     std::array<U64, 64>& rook_magics, 
     std::array<U64, 64>& rook_mask_lookup_table,
-    std::array<std::array<U64, 4096>, 64>& rook_attack_lookup_table, 
+    std::array<U64, 64>& rook_mask_bit_count,
+    std::array<U64, 262144>& rook_attack_lookup_table, 
     std::array<U64, 64>& king_lookup_table,
     const U64& occupancy_bitboard) {
     // check if a given game state is legal for the given color
 
     // get attacked bitboard
-    U64 attacked_bitboard = attacked(state, color, pawn_move_lookup_table, pawn_attack_lookup_table, knight_lookup_table, bishop_magics, bishop_mask_lookup_table, bishop_attack_lookup_table, rook_magics, rook_mask_lookup_table, rook_attack_lookup_table, king_lookup_table, get_occupancy(state.piece_bitboards));
+    U64 attacked_bitboard = attacked(state, color, pawn_move_lookup_table, pawn_attack_lookup_table, knight_lookup_table, bishop_magics, bishop_mask_lookup_table, bishop_mask_bit_count, bishop_attack_lookup_table, rook_magics, rook_mask_lookup_table, rook_mask_bit_count, rook_attack_lookup_table, king_lookup_table, get_occupancy(state.piece_bitboards));
 
     // get the king position
     int king_position;
     U64 king_bitboard = state.piece_bitboards[11 - 6*color];
 
     // check if the king is attacked
-    if (attacked_bitboard & king_bitboard) {
-        return false;
-    }
-    else {
-        return true;
-    }
+    return !(attacked_bitboard & king_bitboard);
 }
 
 void generate_lookup_tables( 
-    std::array<std::array<U64, 64>, 2>& pawn_move_lookup_table, 
-    std::array<std::array<U64, 64>, 2>& pawn_attack_lookup_table, 
+    std::array<U64, 128>& pawn_move_lookup_table, 
+    std::array<U64, 128>& pawn_attack_lookup_table, 
     std::array<U64, 64>& knight_lookup_table, 
     std::array<U64, 64>& bishop_magics, 
     std::array<U64, 64>& bishop_mask_lookup_table, 
-    std::array<std::array<U64, 4096>, 64>& bishop_attack_lookup_table, 
+    std::array<U64, 64>& bishop_mask_bit_count,
+    std::array<U64, 262144>& bishop_attack_lookup_table, 
     std::array<U64, 64>& rook_magics, 
     std::array<U64, 64>& rook_mask_lookup_table,
-    std::array<std::array<U64, 4096>, 64>& rook_attack_lookup_table, 
+    std::array<U64, 64>& rook_mask_bit_count,
+    std::array<U64, 262144>& rook_attack_lookup_table, 
     std::array<U64, 64>& king_lookup_table) {
 
-        // create pawn move bitboards lookup table
-    // color, blocked, position as indexes
+    // create pawn move bitboards lookup table
+    // position + NUM_SQUARES*color as index
     for (int i = 0; i < 64; i++) {
         for (int j = 0; j < 2; j++) {
-            pawn_move_lookup_table[j][i] = get_pawn_move(i, j);
+            pawn_move_lookup_table[i + 64*j] = get_pawn_move(i, j);
         }
     }
 
     // create pawn attack bitboards lookup table
-    // color, position as indexes
+    // position + NUM_SQUARES*color as index
     for (int i = 0; i < 64; i++) {
         for (int j = 0; j < 2; j++) {
-            pawn_attack_lookup_table[j][i] = get_pawn_attack(i, j);
+            pawn_attack_lookup_table[i + 64*j] = get_pawn_attack(i, j);
         }
     }
 
@@ -1242,28 +1171,32 @@ void generate_lookup_tables(
 
     // create bishop attack bitboards lookup tables
     // generate magics and lookup tables for each position
+    // position*MAGIC_TABLE_SIZE + index as index
     for (int i = 0; i < 64; i++) {
         U64 mask_bitboard = get_bishop_mask(i);
         bishop_mask_lookup_table[i] = mask_bitboard;
+        bishop_mask_bit_count[i] = count_set_bits(mask_bitboard);
         std::vector<U64> blocker_boards = get_blocker_boards(i, mask_bitboard);
         std::vector<U64> attack_bitboards;
         for (U64 blocker_board : blocker_boards) {
             attack_bitboards.push_back(get_bishop_attack(i, blocker_board));
         }
-        generate_magics(i, mask_bitboard, blocker_boards, attack_bitboards, bishop_magics[i], bishop_attack_lookup_table[i]);
+        generate_magics(i, mask_bitboard, blocker_boards, attack_bitboards, bishop_magics[i], bishop_attack_lookup_table);
     }
 
     // create rook attack bitboards lookup tables
     // generate magics and lookup tables for each position
+    // position*MAGIC_TABLE_SIZE + index as index
     for (int i = 0; i < 64; i++) {
         U64 mask_bitboard = get_rook_mask(i);
         rook_mask_lookup_table[i] = mask_bitboard;
+        rook_mask_bit_count[i] = count_set_bits(mask_bitboard);
         std::vector<U64> blocker_boards = get_blocker_boards(i, mask_bitboard);
         std::vector<U64> attack_bitboards;
         for (U64 blocker_board : blocker_boards) {
             attack_bitboards.push_back(get_rook_attack(i, blocker_board));
         }
-        generate_magics(i, mask_bitboard, blocker_boards, attack_bitboards, rook_magics[i], rook_attack_lookup_table[i]);
+        generate_magics(i, mask_bitboard, blocker_boards, attack_bitboards, rook_magics[i], rook_attack_lookup_table);
     }
 
     // create king attack bitboards lookup table
