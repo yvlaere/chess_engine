@@ -2,6 +2,7 @@
 #include <limits>
 #include <string>
 #include <chrono>
+#include <algorithm>
 
 // plain negamax with alpha-beta pruning
 
@@ -196,24 +197,48 @@ int negamax(game_state &state, int depth, int alpha, int beta, bool color,
         rook_attack_lookup_table, king_lookup_table, 
         occupancy_bitboard);
 
+    std::array<int, 256> move_order;
+    std::array<int, 256> scores;
+
     // iterate over all pseudo-legal moves
     for (int i = 0; i < move_count; i++) {
 
-        int score = -INF;
-        int attacker_value = 0;
+        int score = 0;
 
         // check for capture
-        int victim_value = piece_values[piece_on_square[moves[i].to_position]%6];
-        if (victim_value > 0) {
+        int victim_index = piece_on_square[moves[i].to_position];
+        if (victim_index > 0) {
+            int victim_value = piece_values[victim_index%6];
             int attacker_value = piece_values[moves[i].piece_index%6];
-            score = (attacker_value - victim_value);
+            score = victim_value*10 - attacker_value;
+            //std::cout << "capture" << std::endl;
+            //std::cout << "attacker: " << moves[i].piece_index << std::endl;
+            //std::cout << "victim: " << piece_on_square[moves[i].to_position] << std::endl;
+            //std::cout << "location: " << moves[i].to_position << std::endl;
         }
         
         // check for best move
-        if (moves[i].from_position == best_move.from_position && moves[i].to_position == best_move.to_position) {
+        if (moves[i].piece_index == best_move.piece_index &&
+            moves[i].from_position == best_move.from_position &&
+            moves[i].to_position == best_move.to_position) {
             score += INF;
         }
+
+        scores[i] = score;
+        move_order[i] = i; // store the index
     }
+
+    // sort moves based on scores
+    std::sort(move_order.begin(), move_order.begin() + move_count, [&](int a, int b) {
+        return scores[a] > scores[b];
+    });
+
+    //visualize_game_state(state);
+
+    //for (int i = 0; i < move_count; i++) {
+        //std::cout << "move " << move_order[i] << std::endl;
+        //std::cout << "score " << scores[move_order[i]] << std::endl;
+    //}
 
     int max_score = -INF;
     int best_move_index = -1;
@@ -223,9 +248,11 @@ int negamax(game_state &state, int depth, int alpha, int beta, bool color,
 
     // iterate over all pseudo-legal moves
     for (int i = 0; i < move_count; i++) {
+        // get the move index from the sorted order
+        int move_index = i;//move_order[i];
 
         move_undo& undo = undo_stack[current_depth];
-        apply_move(state, moves[i], zobrist_hash, zobrist, undo, piece_on_square);
+        apply_move(state, moves[move_index], zobrist_hash, zobrist, undo, piece_on_square);
         U64 new_occupancy = get_occupancy(state.piece_bitboards);
 
         // ensure move is legal (not putting king in check)
@@ -243,13 +270,13 @@ int negamax(game_state &state, int depth, int alpha, int beta, bool color,
             }
             if (alpha >= beta) {
                 // Undo the move
-                undo_move(state, moves[i], zobrist_hash, zobrist, undo, piece_on_square);
+                undo_move(state, moves[move_index], zobrist_hash, zobrist, undo, piece_on_square);
                 break;
             }
         }
 
         // Undo the move
-        undo_move(state, moves[i], zobrist_hash, zobrist, undo, piece_on_square);
+        undo_move(state, moves[move_index], zobrist_hash, zobrist, undo, piece_on_square);
     }
 
     // terminal node: checkmate or stalemate.

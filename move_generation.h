@@ -145,9 +145,9 @@ int pseudo_legal_move_generator(std::array<move, 256>& moves,
     std::array<U64, 262144>& rook_attack_lookup_table, 
     std::array<U64, 64>& king_lookup_table,
     const U64& occupancy_bitboard);
-U64 init_zobrist_hashing(game_state &state, zobrist_randoms &zobrist, bool color);
-void apply_move(game_state& state, move& move_to_apply, U64& zobrist_hash, zobrist_randoms &zobrist, move_undo& undo);
-void undo_move(game_state& state, move& move_to_undo, U64& zobrist_hash, zobrist_randoms &zobrist, move_undo& undo);
+U64 init_zobrist_hashing_mailbox(game_state &state, zobrist_randoms &zobrist, bool color, std::array<int, 64>& piece_on_square);
+void apply_move(game_state& state, move& move_to_apply, U64& zobrist_hash, zobrist_randoms &zobrist, move_undo& undo, std::array<int, 64>& piece_on_square);
+void undo_move(game_state& state, move& move_to_undo, U64& zobrist_hash, zobrist_randoms &zobrist, move_undo& undo, std::array<int, 64>& piece_on_square);
 bool pseudo_to_legal(game_state& state, bool color, 
     std::array<U64, 128>& pawn_move_lookup_table, 
     std::array<U64, 128>& pawn_attack_lookup_table, 
