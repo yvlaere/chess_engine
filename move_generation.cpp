@@ -905,11 +905,12 @@ void apply_move(game_state& state, move& move_to_apply, U64& zobrist_hash, zobri
 
     // add the piece to the to position
     state.piece_bitboards[move_to_apply.promotion_piece_index] |= 1ULL << move_to_apply.to_position;
-    zobrist_hash ^= zobrist.zobrist_piece_table[move_to_apply.from_position*NUM_PIECES + move_to_apply.piece_index];
+    zobrist_hash ^= zobrist.zobrist_piece_table[move_to_apply.to_position*NUM_PIECES + move_to_apply.piece_index];
 
     // remove potential captured piece
     // get opponent color
     bool opponent_color = move_to_apply.piece_index < 6;
+    zobrist_hash ^= zobrist.zobrist_black_to_move;
 
     // remove captured opponent piece
     for (int i = 0; i < 6; i++) {
