@@ -816,8 +816,9 @@ int pseudo_legal_move_generator(std::array<move, 256>& moves, game_state& state,
     return move_index;
 }
 
-U64 init_zobrist_hashing(game_state &state, zobrist_randoms &zobrist, bool color) {
+U64 init_zobrist_hashing_mailbox(game_state &state, zobrist_randoms &zobrist, bool color, std::array<int, 64>& piece_on_square) {
     // create random bitstrings for each game element and hash the first position
+    // populate the mailbox representation with the piece index
 
     // generate a seed
     std::random_device rd;
@@ -882,10 +883,24 @@ U64 init_zobrist_hashing(game_state &state, zobrist_randoms &zobrist, bool color
         hash ^= zobrist.zobrist_black_to_move;
     }
 
+    // populate the mailbox representation
+    for (int i = 0; i < 6; i++) {
+
+        // get the correct piece bitboard
+        U64 piece_bitboard = state.piece_bitboards[i + 6*color];
+        while (piece_bitboard) {
+
+            // get the position of the least significant set bit and remove it from the bitboard
+            int position = pop_lsb(piece_bitboard);
+            piece_on_square[position] = i + 6*color;
+        }
+    }
+        
+
     return hash;
 }
 
-void apply_move(game_state& state, move& move_to_apply, U64& zobrist_hash, zobrist_randoms &zobrist, move_undo& undo) {
+void apply_move(game_state& state, move& move_to_apply, U64& zobrist_hash, zobrist_randoms &zobrist, move_undo& undo, std::array<int, 64>& piece_on_square) {
     // apply a move object to a gamestate bitboard
 
     // save undo information
@@ -902,10 +917,12 @@ void apply_move(game_state& state, move& move_to_apply, U64& zobrist_hash, zobri
     // remove the piece from the from position
     state.piece_bitboards[move_to_apply.piece_index] &= ~(1ULL << move_to_apply.from_position);
     zobrist_hash ^= zobrist.zobrist_piece_table[move_to_apply.from_position*NUM_PIECES + move_to_apply.piece_index];
+    piece_on_square[move_to_apply.from_position] = 0;
 
     // add the piece to the to position
     state.piece_bitboards[move_to_apply.promotion_piece_index] |= 1ULL << move_to_apply.to_position;
     zobrist_hash ^= zobrist.zobrist_piece_table[move_to_apply.to_position*NUM_PIECES + move_to_apply.piece_index];
+    piece_on_square[move_to_apply.to_position] = move_to_apply.promotion_piece_index;
 
     // remove potential captured piece
     // get opponent color
@@ -930,6 +947,7 @@ void apply_move(game_state& state, move& move_to_apply, U64& zobrist_hash, zobri
             zobrist_hash ^= zobrist.zobrist_piece_table[(move_to_apply.to_position - 8)*NUM_PIECES + 6];
             undo.captured_piece_index = 6;
             undo.en_passant = true;
+            piece_on_square[move_to_apply.to_position - 8] = 0;
         }
     }
     else if (move_to_apply.piece_index == 6) {
@@ -938,6 +956,7 @@ void apply_move(game_state& state, move& move_to_apply, U64& zobrist_hash, zobri
             zobrist_hash ^= zobrist.zobrist_piece_table[(move_to_apply.to_position + 8)*NUM_PIECES + 0];
             undo.captured_piece_index = 0;
             undo.en_passant = true;
+            piece_on_square[move_to_apply.to_position + 8] = 0;
         }
     }
 
@@ -1022,6 +1041,8 @@ void apply_move(game_state& state, move& move_to_apply, U64& zobrist_hash, zobri
             // update rook part of the hash
             zobrist_hash ^= zobrist.zobrist_piece_table[0*NUM_PIECES + 3];
             zobrist_hash ^= zobrist.zobrist_piece_table[3*NUM_PIECES + 3];
+            piece_on_square[3] = 3;
+            piece_on_square[0] = 0;
         }
         // black long castling
         else if (move_to_apply.to_position == 58) {
@@ -1030,6 +1051,8 @@ void apply_move(game_state& state, move& move_to_apply, U64& zobrist_hash, zobri
             // update rook part of the hash
             zobrist_hash ^= zobrist.zobrist_piece_table[56*NUM_PIECES + 9];
             zobrist_hash ^= zobrist.zobrist_piece_table[59*NUM_PIECES + 9];
+            piece_on_square[59] = 9;
+            piece_on_square[56] = 0;
         }
         // white short castling
         else if (move_to_apply.to_position == 6) {
@@ -1038,6 +1061,8 @@ void apply_move(game_state& state, move& move_to_apply, U64& zobrist_hash, zobri
             // update rook part of the hash
             zobrist_hash ^= zobrist.zobrist_piece_table[7*NUM_PIECES + 3];
             zobrist_hash ^= zobrist.zobrist_piece_table[5*NUM_PIECES + 3];
+            piece_on_square[5] = 3;
+            piece_on_square[7] = 0;
         }
         // black short castling
         else if (move_to_apply.to_position == 62) {
@@ -1046,11 +1071,13 @@ void apply_move(game_state& state, move& move_to_apply, U64& zobrist_hash, zobri
             // update rook part of the hash
             zobrist_hash ^= zobrist.zobrist_piece_table[63*NUM_PIECES + 9];
             zobrist_hash ^= zobrist.zobrist_piece_table[61*NUM_PIECES + 9];
+            piece_on_square[61] = 9;
+            piece_on_square[63] = 0;
         }
     }
 }
 
-void undo_move(game_state& state, move& move_to_undo, U64& zobrist_hash, zobrist_randoms &zobrist, move_undo& undo) {
+void undo_move(game_state& state, move& move_to_undo, U64& zobrist_hash, zobrist_randoms &zobrist, move_undo& undo, std::array<int, 64>& piece_on_square) {
     // undo a move object to a gamestate bitboard
 
     zobrist_hash = undo.zobrist_hash;
@@ -1063,9 +1090,11 @@ void undo_move(game_state& state, move& move_to_undo, U64& zobrist_hash, zobrist
 
     // remove the piece from the to position
     state.piece_bitboards[move_to_undo.promotion_piece_index] &= ~(1ULL << move_to_undo.to_position);
+    piece_on_square[move_to_undo.to_position] = 0;
 
     // add the piece to the from position
     state.piece_bitboards[move_to_undo.piece_index] |= 1ULL << move_to_undo.from_position;
+    piece_on_square[move_to_undo.from_position] = move_to_undo.piece_index;
 
     // captured pieces
     if (undo.captured_piece_index != -1) {
@@ -1073,13 +1102,16 @@ void undo_move(game_state& state, move& move_to_undo, U64& zobrist_hash, zobrist
         if (undo.en_passant) {
             if (undo.captured_piece_index == 0) {
                 state.piece_bitboards[undo.captured_piece_index] |= 1ULL << (move_to_undo.to_position + 8);
+                piece_on_square[move_to_undo.to_position + 8] = undo.captured_piece_index;
             }
             else if (undo.captured_piece_index == 6) {
                 state.piece_bitboards[undo.captured_piece_index] |= 1ULL << (move_to_undo.to_position - 8);
+                piece_on_square[move_to_undo.to_position - 8] = undo.captured_piece_index;
             }
         }
         else {
             state.piece_bitboards[undo.captured_piece_index] |= 1ULL << move_to_undo.to_position;
+            piece_on_square[move_to_undo.to_position] = undo.captured_piece_index;
         }
     }
 
@@ -1089,21 +1121,29 @@ void undo_move(game_state& state, move& move_to_undo, U64& zobrist_hash, zobrist
         if (move_to_undo.to_position == 2) {
             state.piece_bitboards[3] &= ~(1ULL << 3);
             state.piece_bitboards[3] |= 1ULL << 0;
+            piece_on_square[0] = 3;
+            piece_on_square[3] = 0;
         }
         // black long castling
         else if (move_to_undo.to_position == 58) {
             state.piece_bitboards[9] &= ~(1ULL << 59);
             state.piece_bitboards[9] |= 1ULL << 56;
+            piece_on_square[56] = 9;
+            piece_on_square[59] = 0;
         }
         // white short castling
         else if (move_to_undo.to_position == 6) {
             state.piece_bitboards[3] &= ~(1ULL << 5);
             state.piece_bitboards[3] |= 1ULL << 7;
+            piece_on_square[7] = 3;
+            piece_on_square[5] = 0;
         }
         // black short castling
         else if (move_to_undo.to_position == 62) {
             state.piece_bitboards[9] &= ~(1ULL << 61);
             state.piece_bitboards[9] |= 1ULL << 63;
+            piece_on_square[63] = 9;
+            piece_on_square[61] = 0;
         }
     }
 }

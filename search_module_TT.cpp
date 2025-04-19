@@ -5,14 +5,19 @@
 
 // plain negamax with alpha-beta pruning
 
+//global constants
 constexpr int INF = std::numeric_limits<int>::max() / 2;
 constexpr size_t TT_SIZE = 1 << 20;
 
-// temp vars
-int tt_hits = 0;
-int tt_miss = 0;
-int tt_score = 0;
-int tt_cutoff = 0;
+// piece values in centipawns
+constexpr int pawn_value = 100;
+constexpr int knight_value = 320;
+constexpr int bishop_value = 330;
+constexpr int rook_value = 500;
+constexpr int queen_value = 900;
+constexpr int king_value = 20000;
+
+constexpr std::array<int, 6> piece_values = {pawn_value, knight_value, bishop_value, rook_value, queen_value, king_value};
 
 std::string index_to_chess(int index) {
     if (index < 0 || index >= 64) {
@@ -82,16 +87,6 @@ void visualize_game_state(const game_state& state) {
 
 int evaluation(game_state &state) {
     // basic evaluation with piece square tables, based on the simplified evaluation function on chessprogramming.org
-
-    // piece values in centipawns
-    int pawn_value = 100;
-    int knight_value = 320;
-    int bishop_value = 330;
-    int rook_value = 500;
-    int queen_value = 900;
-    int king_value = 20000;
-
-    std::array<int, 6> piece_values = {pawn_value, knight_value, bishop_value, rook_value, queen_value, king_value};
 
     // piece square tables
     std::array<int, 64> pawn_square_table = {0, 0, 0, 0, 0, 0, 0, 0, 5, 10, 10, -20, -20, 10, 10, 5, 5, -5, -10, 0, 0, -10, -5, 5, 0, 0, 0, 20, 20, 0, 0, 0, 5, 5, 10, 25, 25, 10, 5, 5, 10, 10, 20, 30, 30, 20, 10, 10, 50, 50, 50, 50, 50, 50, 50, 50, 0, 0, 0, 0, 0, 0, 0, 0};
@@ -163,7 +158,8 @@ int negamax(game_state &state, int depth, int alpha, int beta, bool color,
     zobrist_randoms& zobrist, U64& zobrist_hash,
     std::array<std::array<move, 256>, 256>& moves_stack, 
     std::array<move_undo, 256>& undo_stack,
-    std::vector<transposition_table_entry>& transposition_table) {
+    std::vector<transposition_table_entry>& transposition_table,
+    std::array<int, 64>& piece_on_square) {
 
     if (depth == 0) {
         int eval = evaluation(state);
@@ -173,10 +169,9 @@ int negamax(game_state &state, int depth, int alpha, int beta, bool color,
     // check transposition table for pruning
     U64 TT_index = zobrist_hash & (TT_SIZE - 1);
     transposition_table_entry& entry = transposition_table[TT_index];
+    move best_move;
     if (entry.hash == zobrist_hash && entry.depth >= depth) {
-        tt_hits++;
         if (entry.flag == 0) {
-            tt_score++;
             return entry.score;
         }
         else if (entry.flag == 1) {
@@ -186,12 +181,9 @@ int negamax(game_state &state, int depth, int alpha, int beta, bool color,
             beta = std::min(beta, entry.score);
         }
         if (alpha >= beta) {
-            tt_cutoff++;
             return entry.score;
         }
-    }
-    else {
-        tt_miss++;
+        best_move = entry.best_move;
     }
     
     // generate moves from the current position.
@@ -204,21 +196,42 @@ int negamax(game_state &state, int depth, int alpha, int beta, bool color,
         rook_attack_lookup_table, king_lookup_table, 
         occupancy_bitboard);
 
+    // iterate over all pseudo-legal moves
+    for (int i = 0; i < move_count; i++) {
+
+        int score = -INF;
+        int attacker_value = 0;
+
+        // check for capture
+        int victim_value = piece_values[piece_on_square[moves[i].to_position]%6];
+        if (victim_value > 0) {
+            int attacker_value = piece_values[moves[i].piece_index%6];
+            score = (attacker_value - victim_value);
+        }
+        
+        // check for best move
+        if (moves[i].from_position == best_move.from_position && moves[i].to_position == best_move.to_position) {
+            score += INF;
+        }
+    }
+
     int max_score = -INF;
     int best_move_index = -1;
     int legal_moves = 0;
+    int original_alpha = alpha;
+    int original_beta = beta;
 
     // iterate over all pseudo-legal moves
     for (int i = 0; i < move_count; i++) {
 
         move_undo& undo = undo_stack[current_depth];
-        apply_move(state, moves[i], zobrist_hash, zobrist, undo);
+        apply_move(state, moves[i], zobrist_hash, zobrist, undo, piece_on_square);
         U64 new_occupancy = get_occupancy(state.piece_bitboards);
 
         // ensure move is legal (not putting king in check)
         if (pseudo_to_legal(state, !color, pawn_move_lookup_table, pawn_attack_lookup_table, knight_lookup_table, bishop_magics, bishop_mask_lookup_table, bishop_mask_bit_count, bishop_attack_lookup_table, rook_magics, rook_mask_lookup_table, rook_mask_bit_count, rook_attack_lookup_table, king_lookup_table, new_occupancy)) {
             // apply negamax
-            int score = -negamax(state, depth - 1, -beta, -alpha, !color, pawn_move_lookup_table, pawn_attack_lookup_table, knight_lookup_table, bishop_magics, bishop_mask_lookup_table, bishop_mask_bit_count, bishop_attack_lookup_table, rook_magics, rook_mask_lookup_table, rook_mask_bit_count, rook_attack_lookup_table, king_lookup_table, new_occupancy, current_depth + 1, zobrist, zobrist_hash, moves_stack, undo_stack, transposition_table);
+            int score = -negamax(state, depth - 1, -beta, -alpha, !color, pawn_move_lookup_table, pawn_attack_lookup_table, knight_lookup_table, bishop_magics, bishop_mask_lookup_table, bishop_mask_bit_count, bishop_attack_lookup_table, rook_magics, rook_mask_lookup_table, rook_mask_bit_count, rook_attack_lookup_table, king_lookup_table, new_occupancy, current_depth + 1, zobrist, zobrist_hash, moves_stack, undo_stack, transposition_table, piece_on_square);
             legal_moves++;
 
             if (score > max_score) {
@@ -230,26 +243,13 @@ int negamax(game_state &state, int depth, int alpha, int beta, bool color,
             }
             if (alpha >= beta) {
                 // Undo the move
-                undo_move(state, moves[i], zobrist_hash, zobrist, undo);
+                undo_move(state, moves[i], zobrist_hash, zobrist, undo, piece_on_square);
                 break;
             }
         }
 
         // Undo the move
-        undo_move(state, moves[i], zobrist_hash, zobrist, undo);
-    }
-
-    // store the result in the transposition table
-    entry.hash = zobrist_hash;
-    entry.depth = depth;
-    entry.score = max_score;
-    entry.best_move = moves[best_move_index];
-    entry.flag = 0; // exact score
-    if (max_score <= alpha) {
-        entry.flag = 2; // beta cutoff
-    }
-    else if (max_score >= beta) {
-        entry.flag = 1; // alpha cutoff
+        undo_move(state, moves[i], zobrist_hash, zobrist, undo, piece_on_square);
     }
 
     // terminal node: checkmate or stalemate.
@@ -263,6 +263,19 @@ int negamax(game_state &state, int depth, int alpha, int beta, bool color,
             // checkmate
             return -INF;
         }
+    }
+
+    // store the result in the transposition table
+    entry.hash = zobrist_hash;
+    entry.depth = depth;
+    entry.score = max_score;
+    entry.best_move = moves[best_move_index];
+    entry.flag = 0; // exact score
+    if (max_score <= original_alpha) {
+        entry.flag = 2; // beta cutoff
+    }
+    else if (max_score >= original_beta) {
+        entry.flag = 1; // alpha cutoff
     }
     
     return max_score;
@@ -335,7 +348,8 @@ int main() {
 
     // initialize
     game_state state = initial_game_state;
-    U64 zobrist_hash = init_zobrist_hashing(state, zobrist, false);
+    std::array<int, 64> piece_on_square;
+    U64 zobrist_hash = init_zobrist_hashing_mailbox(state, zobrist, false, piece_on_square);
     U64 occupancy_bitboard = get_occupancy(state.piece_bitboards);
     int best_score;
     int best_move_index = 0;
@@ -373,14 +387,14 @@ int main() {
 
             // negamax needs to start at depth 1 because depth 0 is here
             move_undo& undo = undo_stack[0];
-            apply_move(state, moves[i], zobrist_hash, zobrist, undo);
+            apply_move(state, moves[i], zobrist_hash, zobrist, undo, piece_on_square);
             U64 new_occupancy = get_occupancy(state.piece_bitboards);
 
             // ensure move is legal (not putting king in check)
             if (pseudo_to_legal(state, !color, pawn_move_lookup_table, pawn_attack_lookup_table, knight_lookup_table, bishop_magics, bishop_mask_lookup_table, bishop_mask_bit_count, bishop_attack_lookup_table, rook_magics, rook_mask_lookup_table, rook_mask_bit_count, rook_attack_lookup_table, king_lookup_table, new_occupancy)) {
                 // apply negamax !!!from perspective of opponent, so score needs to be negated
 
-                int score = -negamax(state, negamax_depth, -INF, INF, !color, pawn_move_lookup_table, pawn_attack_lookup_table, knight_lookup_table, bishop_magics, bishop_mask_lookup_table, bishop_mask_bit_count, bishop_attack_lookup_table, rook_magics, rook_mask_lookup_table, rook_mask_bit_count, rook_attack_lookup_table, king_lookup_table, new_occupancy, 1, zobrist, zobrist_hash, moves_stack, undo_stack, transposition_table);
+                int score = -negamax(state, negamax_depth, -INF, INF, !color, pawn_move_lookup_table, pawn_attack_lookup_table, knight_lookup_table, bishop_magics, bishop_mask_lookup_table, bishop_mask_bit_count, bishop_attack_lookup_table, rook_magics, rook_mask_lookup_table, rook_mask_bit_count, rook_attack_lookup_table, king_lookup_table, new_occupancy, 1, zobrist, zobrist_hash, moves_stack, undo_stack, transposition_table, piece_on_square);
 
                 // check if it's best move
                 if (score > best_score) {
@@ -390,19 +404,15 @@ int main() {
             }
 
             // Undo the move
-            undo_move(state, moves[i], zobrist_hash, zobrist, undo);
+            undo_move(state, moves[i], zobrist_hash, zobrist, undo, piece_on_square);
         }
         std::cout << "Best score: " << best_score << std::endl;
-        apply_move(state, moves[best_move_index], zobrist_hash, zobrist, undo_stack[0]);
+        apply_move(state, moves[best_move_index], zobrist_hash, zobrist, undo_stack[0], piece_on_square);
         std::cout << "Best move: piece index: " << moves[best_move_index].piece_index << " from: " << moves[best_move_index].from_position << " to: " << moves[best_move_index].to_position << std::endl;
         visualize_game_state(state);
         auto end = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double, std::milli> duration = end - start;
         std::cout << "Time taken: " << duration.count() << " ms" << std::endl;
-        std::cout << "TT hits: " << tt_hits << std::endl;
-        std::cout << "TT misses: " << tt_miss << std::endl;
-        std::cout << "TT score: " << tt_score << std::endl;
-        std::cout << "TT cutoff: " << tt_cutoff << std::endl;
 
         // update state
         color = !color;
@@ -421,7 +431,7 @@ int main() {
         // iterate over all pseudo-legal moves
         for (int i = 0; i < move_count2; i++) {
 
-            apply_move(state, moves2[i], zobrist_hash, zobrist, undo_stack[0]);
+            apply_move(state, moves2[i], zobrist_hash, zobrist, undo_stack[0], piece_on_square);
             U64 new_occupancy = get_occupancy(state.piece_bitboards);
 
             // ensure move is legal (not putting king in check)
@@ -430,7 +440,7 @@ int main() {
             }
 
             // Undo the move
-            undo_move(state, moves2[i], zobrist_hash, zobrist, undo_stack[0]);
+            undo_move(state, moves2[i], zobrist_hash, zobrist, undo_stack[0], piece_on_square);
         }
 
         // ask for move
@@ -438,7 +448,7 @@ int main() {
         std::cout << "Move: ";
         std::cin >> player_move;
 
-        apply_move(state, moves2[player_move], zobrist_hash, zobrist, undo_stack[0]);
+        apply_move(state, moves2[player_move], zobrist_hash, zobrist, undo_stack[0], piece_on_square);
         visualize_game_state(state);
 
         // update state
